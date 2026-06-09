@@ -5,59 +5,10 @@ from typing import Literal
 
 import numba
 import numpy as np
+from pynndescent import NNDescent
 from scipy.sparse import csr_matrix
-from scipy.spatial import KDTree
 
 logger = logging.getLogger(__name__)
-
-
-@numba.njit(parallel=True, fastmath=True, cache=True)
-def _compute_distances(X: np.ndarray) -> np.ndarray:
-    n = X.shape[0]
-    dist = np.empty((n, n), dtype=np.float64)
-    for i in numba.prange(n):
-        for j in range(n):
-            s = 0.0
-            for k in range(X.shape[1]):
-                d = X[i, k] - X[j, k]
-                s += d * d
-            dist[i, j] = np.sqrt(s)
-    return dist
-
-
-@numba.njit(parallel=True, fastmath=True, cache=True)
-def _compute_knn_distances(X: np.ndarray, n_neighbors: int) -> tuple[np.ndarray, np.ndarray]:
-    n = X.shape[0]
-    indices = np.empty((n, n_neighbors), dtype=np.int64)
-    distances = np.empty((n, n_neighbors), dtype=np.float64)
-
-    for i in numba.prange(n):
-        dists_i = np.empty(n, dtype=np.float64)
-        for j in range(n):
-            s = 0.0
-            for k in range(X.shape[1]):
-                d = X[i, k] - X[j, k]
-                s += d * d
-            dists_i[j] = np.sqrt(s)
-
-        for k_idx in range(n_neighbors):
-            min_val = 1e18
-            min_pos = 0
-            for j in range(n):
-                found = False
-                for p in range(k_idx):
-                    if indices[i, p] == j:
-                        found = True
-                        break
-                if found:
-                    continue
-                if dists_i[j] < min_val:
-                    min_val = dists_i[j]
-                    min_pos = j
-            indices[i, k_idx] = min_pos
-            distances[i, k_idx] = min_val
-
-    return indices, distances
 
 
 @numba.njit(fastmath=True, cache=True)
@@ -208,6 +159,28 @@ def _optimize_layout(
     return embedding
 
 
+def _pynndescent_knn(
+    X: np.ndarray,
+    n_neighbors: int,
+    metric: str = "euclidean",
+    random_state: int = 42,
+    n_jobs: int = -1,
+) -> tuple[np.ndarray, np.ndarray]:
+    logger.info("  PyNNDescent: building ANN index on %d samples ...", X.shape[0])
+    index = NNDescent(
+        X,
+        n_neighbors=n_neighbors,
+        metric=metric,
+        random_state=random_state,
+        n_jobs=n_jobs,
+        compressed=True,
+    )
+    indices, distances = index.neighbor_graph
+    indices = indices[:, 1:].astype(np.int64, copy=True)
+    distances = distances[:, 1:].astype(np.float64, copy=True)
+    return indices, distances
+
+
 def umap_numba(
     X: np.ndarray,
     n_neighbors: int = 15,
@@ -216,7 +189,7 @@ def umap_numba(
     learning_rate: float = 1.0,
     min_dist: float = 0.1,
     spread: float = 1.0,
-    metric: Literal["euclidean"] = "euclidean",
+    metric: Literal["euclidean", "cosine"] = "euclidean",
     negative_sample_rate: int = 5,
     random_state: int = 42,
     n_pcs: int | None = None,
@@ -228,22 +201,17 @@ def umap_numba(
         logger.info("Using first %d columns as pre-computed PCA embeddings", n_pcs)
         X_work = X[:, :n_pcs].astype(np.float64, copy=True)
     else:
-        X_work = X.astype(np.float64, copy=True)
+        X_work = np.asarray(X, dtype=np.float64)
 
     n_samples = X_work.shape[0]
-    logger.info("UMAP: %d samples, n_neighbors=%d", n_samples, n_neighbors)
+    logger.info("UMAP: %d samples, n_neighbors=%d (PyNNDescent backend)", n_samples, n_neighbors)
 
     n_neighbors = min(n_neighbors, n_samples - 1)
 
-    logger.info("  Step 1/4: Computing k-NN graph ...")
-    if n_samples <= 20_000:
-        indices, distances = _compute_knn_distances(X_work, n_neighbors)
-    else:
-        logger.info("  Using KDTree for large dataset (n=%d)", n_samples)
-        tree = KDTree(X_work)
-        distances, indices = tree.query(X_work, k=n_neighbors + 1)
-        indices = indices[:, 1:].astype(np.int64)
-        distances = distances[:, 1:].astype(np.float64)
+    logger.info("  Step 1/4: Computing k-NN graph via PyNNDescent ...")
+    indices, distances = _pynndescent_knn(
+        X_work, n_neighbors, metric=metric, random_state=random_state,
+    )
 
     logger.info("  Step 2/4: Smoothing k-NN distances ...")
     rho, sigmas = _smooth_knn_dist(distances, n_neighbors)

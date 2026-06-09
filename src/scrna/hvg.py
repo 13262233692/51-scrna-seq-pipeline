@@ -9,6 +9,26 @@ from scipy import sparse
 logger = logging.getLogger(__name__)
 
 
+def _sparse_mean_var(X: sparse.csr_matrix) -> tuple[np.ndarray, np.ndarray]:
+    n_cells, n_genes = X.shape
+    means = np.asarray(X.sum(axis=0)).ravel() / n_cells
+
+    X_sq = X.copy()
+    X_sq.data **= 2
+    mean_sq = np.asarray(X_sq.sum(axis=0)).ravel() / n_cells
+    del X_sq
+
+    variances = mean_sq - means ** 2
+    variances = np.maximum(variances, 0.0)
+    return means, variances
+
+
+def _dense_mean_var(X: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    means = X.mean(axis=0)
+    variances = X.var(axis=0)
+    return means, variances
+
+
 def highly_variable_genes(
     adata: ad.AnnData,
     n_top_genes: int = 2000,
@@ -17,15 +37,14 @@ def highly_variable_genes(
     span: float = 0.3,
 ) -> ad.AnnData:
     X = adata.X
+
     if sparse.issparse(X):
-        X_dense = np.asarray(X.tocsr()[:, :].todense())
+        logger.info("Computing HVG on sparse matrix (%s cells x %s genes) — zero-copy", *X.shape)
+        mean_expr, var_expr = _sparse_mean_var(X.tocsr())
     else:
-        X_dense = np.asarray(X, dtype=np.float64)
+        mean_expr, var_expr = _dense_mean_var(np.asarray(X, dtype=np.float64))
 
     if flavor == "seurat_v3":
-        mean_expr = X_dense.mean(axis=0)
-        var_expr = X_dense.var(axis=0)
-
         mean_expr = np.maximum(mean_expr, 1e-12)
         variance_std = np.sqrt(var_expr)
 
@@ -41,9 +60,8 @@ def highly_variable_genes(
         hvg_mask[sorted_indices[:n_select]] = True
 
     else:
-        mean_expr = X_dense.mean(axis=0)
-        var_expr = X_dense.var(axis=0)
-        dispersion = var_expr / np.maximum(mean_expr, 1e-12)
+        mean_expr_safe = np.maximum(mean_expr, 1e-12)
+        dispersion = var_expr / mean_expr_safe
 
         sorted_indices = np.argsort(-dispersion)
         hvg_mask = np.zeros(adata.n_vars, dtype=bool)

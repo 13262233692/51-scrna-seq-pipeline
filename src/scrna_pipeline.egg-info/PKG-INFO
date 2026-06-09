@@ -11,6 +11,7 @@ Requires-Dist: numba>=0.59.0
 Requires-Dist: scikit-learn>=1.3.0
 Requires-Dist: leidenalg>=0.10.0
 Requires-Dist: igraph>=0.11.0
+Requires-Dist: pynndescent>=0.5.11
 Provides-Extra: dev
 Requires-Dist: pytest>=7.0; extra == "dev"
 Requires-Dist: ruff>=0.3.0; extra == "dev"

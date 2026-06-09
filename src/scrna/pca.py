@@ -5,7 +5,7 @@ import logging
 import anndata as ad
 import numpy as np
 from scipy import sparse
-from sklearn.decomposition import PCA
+from sklearn.decomposition import TruncatedSVD
 
 logger = logging.getLogger(__name__)
 
@@ -14,50 +14,51 @@ def run_pca(
     adata: ad.AnnData,
     n_pcs: int = 50,
     layer: str | None = None,
-    svd_solver: str = "arpack",
     random_state: int = 42,
     use_highly_variable: bool = True,
+    algorithm: str = "arpack",
 ) -> ad.AnnData:
     if use_highly_variable and "highly_variable" in adata.var.columns:
         hvg_mask = adata.var["highly_variable"].values
-        logger.info("Using %d HVGs for PCA", hvg_mask.sum())
+        logger.info("Using %d HVGs for PCA (sparse-safe)", hvg_mask.sum())
         X = adata[:, hvg_mask].X
     else:
         X = adata.X if layer is None else adata.layers[layer]
 
-    if sparse.issparse(X):
-        X_input = X.toarray()
-    else:
-        X_input = np.asarray(X, dtype=np.float64)
-
-    n_pcs = min(n_pcs, min(X_input.shape) - 1)
+    n_pcs = min(n_pcs, min(X.shape) - 1)
     if n_pcs < 1:
         raise ValueError(
-            f"Cannot run PCA: insufficient data (shape={X_input.shape}). "
+            f"Cannot run PCA: insufficient data (shape={X.shape}). "
             "Check that QC filtering did not remove all cells/genes."
         )
 
-    logger.info("Running PCA: n_pcs=%d, matrix shape=%s", n_pcs, X_input.shape)
-    pca = PCA(
+    if not sparse.issparse(X):
+        X = sparse.csr_matrix(np.asarray(X, dtype=np.float64))
+
+    logger.info("Running TruncatedSVD: n_pcs=%d, matrix shape=%s, nnz=%d", n_pcs, X.shape, X.nnz)
+    svd = TruncatedSVD(
         n_components=n_pcs,
-        svd_solver=svd_solver,
+        algorithm=algorithm,
         random_state=random_state,
     )
-    X_pca = pca.fit_transform(X_input)
+    X_pca = svd.fit_transform(X)
+
+    explained_var = svd.explained_variance_
+    total_var = np.sum(svd.singular_values_ ** 2)
+    explained_var_ratio = explained_var / max(total_var, 1e-12)
 
     adata.obsm["X_pca"] = X_pca
     adata.uns["pca"] = {
-        "variance": pca.explained_variance_,
-        "variance_ratio": pca.explained_variance_ratio_,
+        "variance": explained_var,
+        "variance_ratio": explained_var_ratio,
     }
 
     if use_highly_variable and "highly_variable" in adata.var.columns:
-        hvg_names = adata.var_names[hvg_mask]
         adata.varm["PCs"] = np.zeros((adata.n_vars, n_pcs))
-        adata.varm["PCs"][hvg_mask] = pca.components_.T
+        adata.varm["PCs"][hvg_mask] = svd.components_.T
 
     logger.info(
-        "PCA complete: top-10 variance ratio = %.4f",
-        pca.explained_variance_ratio_[:10].sum(),
+        "TruncatedSVD complete: top-10 variance ratio = %.4f (no densification)",
+        explained_var_ratio[:10].sum(),
     )
     return adata
