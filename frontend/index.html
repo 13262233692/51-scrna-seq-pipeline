@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>scRNA-seq Cell Atlas</title>
+<title>scRNA-seq Cell Atlas — Trajectory & Pseudotime</title>
 <script src="https://unpkg.com/deck.gl@8.9/dist.min.js"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -13,8 +13,9 @@ canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
 #sidebar {
   position: absolute; top: 16px; left: 16px; z-index: 10;
   background: rgba(10,10,26,0.92); border: 1px solid rgba(100,120,255,0.25);
-  border-radius: 12px; padding: 20px; width: 280px;
+  border-radius: 12px; padding: 20px; width: 300px;
   backdrop-filter: blur(16px); box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  max-height: calc(100vh - 32px); overflow-y: auto;
 }
 #sidebar h1 {
   font-size: 15px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase;
@@ -28,6 +29,13 @@ canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
 .legend-item { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 12px; cursor: pointer; }
 .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 .legend-item.dimmed { opacity: 0.25; }
+.legend-item.root { border: 1px solid #fff; border-radius: 4px; padding: 2px 4px; }
+#pseudotime-bar {
+  margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1);
+}
+#pseudotime-bar h2 { font-size: 11px; color: #888; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 8px; }
+.pst-gradient { width: 100%; height: 14px; border-radius: 4px; background: linear-gradient(to right, #00d4ff, #6478ff, #b44dff, #ff6b6b); }
+.pst-labels { display: flex; justify-content: space-between; font-size: 10px; color: #888; margin-top: 4px; }
 #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); z-index: 100; text-align: center; }
 #loading .spinner { width: 48px; height: 48px; border: 3px solid rgba(100,120,255,0.15); border-top-color: #6478ff; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -46,11 +54,21 @@ canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
     <h1>scRNA-seq Atlas</h1>
     <div id="stats"></div>
     <div id="legend"><h2>Clusters</h2><div id="legend-items"></div></div>
+    <div id="pseudotime-bar" style="display:none">
+      <h2>Pseudotime</h2>
+      <div class="pst-gradient"></div>
+      <div class="pst-labels"><span>0 (Root)</span><span id="pst-max">—</span></div>
+    </div>
   </div>
   <div id="controls">
-    <button class="ctrl-btn active" data-size="2">Small</button>
-    <button class="ctrl-btn" data-size="4">Medium</button>
-    <button class="ctrl-btn" data-size="8">Large</button>
+    <button class="ctrl-btn active" data-mode="cluster">Cluster</button>
+    <button class="ctrl-btn" data-mode="pseudotime">Pseudotime</button>
+    <span style="width:1px;background:rgba(100,120,255,0.25)"></span>
+    <button class="ctrl-btn active" data-size="2">S</button>
+    <button class="ctrl-btn" data-size="4">M</button>
+    <button class="ctrl-btn" data-size="8">L</button>
+    <span style="width:1px;background:rgba(100,120,255,0.25)"></span>
+    <button class="ctrl-btn active" id="btn-traj">Trajectory</button>
   </div>
 </div>
 <script>
@@ -59,9 +77,33 @@ var rawData = null;
 var deckInstance = null;
 var hiddenClusters = {};
 var currentPointSize = 2;
+var colorMode = 'cluster';
+var showTrajectory = true;
 
 function hexToRgb(hex) {
   return [parseInt(hex.slice(1,3),16), parseInt(hex.slice(3,5),16), parseInt(hex.slice(5,7),16)];
+}
+
+function pseudotimeColor(t) {
+  t = Math.max(0, Math.min(1, t));
+  var r, g, b;
+  if (t < 0.33) {
+    var s = t / 0.33;
+    r = Math.round(0 + s * 100);
+    g = Math.round(212 - s * 100);
+    b = 255;
+  } else if (t < 0.66) {
+    var s = (t - 0.33) / 0.33;
+    r = Math.round(100 + s * 80);
+    g = Math.round(112 - s * 34);
+    b = Math.round(255 - s * 0);
+  } else {
+    var s = (t - 0.66) / 0.34;
+    r = Math.round(180 + s * 75);
+    g = Math.round(78 - s * 0);
+    b = Math.round(255 - s * 161);
+  }
+  return [r, g, b, 220];
 }
 
 fetch(DATA_PATH).then(function(r){ return r.json(); }).then(function(data) {
@@ -70,24 +112,105 @@ fetch(DATA_PATH).then(function(r){ return r.json(); }).then(function(data) {
   initDeck();
   renderStats();
   renderLegend();
+  if (rawData.trajectory) {
+    document.getElementById('pseudotime-bar').style.display = 'block';
+    var maxPt = 0;
+    rawData.points.forEach(function(p) { if (p.pseudotime > maxPt) maxPt = p.pseudotime; });
+    document.getElementById('pst-max').textContent = maxPt.toFixed(1);
+  }
 }).catch(function() {
   document.getElementById('loading').innerHTML = '<p style="color:#ff6b6b">Failed to load data.</p>';
 });
 
 function makeLayers() {
-  return [new deck.ScatterplotLayer({
+  var layers = [];
+
+  if (rawData.trajectory && showTrajectory) {
+    var traj = rawData.trajectory;
+
+    var edgeLines = [];
+    for (var ei = 0; ei < traj.mst_edges.length; ei++) {
+      var e = traj.mst_edges[ei];
+      var p0 = traj.centroids[e[0]];
+      var p1 = traj.centroids[e[1]];
+      edgeLines.push({ source: [p0[0], p0[1], 0], target: [p1[0], p1[1], 0] });
+    }
+
+    layers.push(new deck.LineLayer({
+      id: 'mst-edges',
+      data: edgeLines,
+      getSourcePosition: function(d) { return d.source; },
+      getTargetPosition: function(d) { return d.target; },
+      getColor: [255, 255, 255, 160],
+      getWidth: 3,
+      widthMinPixels: 2,
+      widthMaxPixels: 6,
+    }));
+
+    if (traj.smooth_path && traj.smooth_path.length > 0) {
+      var pathData = [{ path: traj.smooth_path.map(function(p) { return [p[0], p[1], 0]; }) }];
+      layers.push(new deck.PathLayer({
+        id: 'trajectory-path',
+        data: pathData,
+        getPath: function(d) { return d.path; },
+        getColor: [0, 212, 255, 200],
+        getWidth: 4,
+        widthMinPixels: 2,
+        widthMaxPixels: 8,
+        rounded: true,
+      }));
+    }
+
+    var centroidData = [];
+    for (var ci = 0; ci < traj.centroids.length; ci++) {
+      var c = traj.centroids[ci];
+      var isRoot = traj.unique_clusters[ci] === traj.root_cluster;
+      centroidData.push({
+        position: [c[0], c[1], 0],
+        color: isRoot ? [255, 107, 107, 255] : [255, 255, 255, 220],
+        radius: isRoot ? 12 : 8,
+        cluster: traj.unique_clusters[ci],
+        isRoot: isRoot,
+        pseudotime: traj.cluster_pseudotime[ci],
+      });
+    }
+
+    layers.push(new deck.ScatterplotLayer({
+      id: 'centroids',
+      data: centroidData,
+      getPosition: function(d) { return d.position; },
+      getFillColor: function(d) { return d.color; },
+      getRadius: function(d) { return d.radius; },
+      radiusMinPixels: 4,
+      radiusMaxPixels: 16,
+      opacity: 1.0,
+      pickable: true,
+    }));
+  }
+
+  layers.push(new deck.ScatterplotLayer({
     id: 'cells',
     data: rawData.points,
     getPosition: function(d) { return [d.position[0], d.position[1], 0]; },
     getFillColor: function(d) {
-      return hiddenClusters[d.cluster] ? [0,0,0,0] : hexToRgb(d.color).concat([220]);
+      if (hiddenClusters[d.cluster]) return [0,0,0,0];
+      if (colorMode === 'pseudotime' && d.pseudotime !== undefined) {
+        var maxPt = 1;
+        for (var i = 0; i < rawData.points.length; i++) {
+          if (rawData.points[i].pseudotime > maxPt) maxPt = rawData.points[i].pseudotime;
+        }
+        return pseudotimeColor(d.pseudotime / maxPt);
+      }
+      return hexToRgb(d.color).concat([220]);
     },
     getRadius: currentPointSize,
     radiusMinPixels: 0.5,
     radiusMaxPixels: 20,
     opacity: 0.85,
     pickable: true,
-  })];
+  }));
+
+  return layers;
 }
 
 function initDeck() {
@@ -118,7 +241,16 @@ function initDeck() {
     getTooltip: function(info) {
       if (!info.object) return null;
       var d = info.object;
-      var html = '<div style="color:' + d.color + ';font-weight:700">Cluster ' + d.cluster + '</div>';
+      var html = '';
+      if (d.isRoot !== undefined) {
+        html += '<div style="color:' + (d.isRoot ? '#ff6b6b' : '#fff') + ';font-weight:700">';
+        html += d.isRoot ? '★ ROOT: ' : 'Node: ';
+        html += 'Cluster ' + d.cluster + '</div>';
+        html += '<div style="color:#aaa">Pseudotime: ' + d.pseudotime.toFixed(2) + '</div>';
+        return { html: html, style: { background: 'rgba(10,10,26,0.95)', border: '1px solid rgba(100,120,255,0.3)', borderRadius: '8px', padding: '10px 12px', fontSize: '11px', pointerEvents: 'none' } };
+      }
+      html += '<div style="color:' + d.color + ';font-weight:700">Cluster ' + d.cluster + '</div>';
+      if (d.pseudotime !== undefined) html += '<div style="color:#00d4ff">Pseudotime: ' + d.pseudotime.toFixed(2) + '</div>';
       if (d.pct_mito !== undefined) html += '<div style="color:#aaa">Mito%: ' + d.pct_mito.toFixed(1) + '</div>';
       if (d.n_genes !== undefined) html += '<div style="color:#aaa">Genes: ' + d.n_genes + '</div>';
       if (d.total_counts !== undefined) html += '<div style="color:#aaa">Counts: ' + d.total_counts.toFixed(0) + '</div>';
@@ -129,18 +261,24 @@ function initDeck() {
 
 function renderStats() {
   var m = rawData.metadata;
-  document.getElementById('stats').innerHTML =
-    '<div class="stat-row"><span class="stat-label">Cells</span><span class="stat-value">' + m.n_cells.toLocaleString() + '</span></div>' +
-    '<div class="stat-row"><span class="stat-label">Clusters</span><span class="stat-value">' + m.n_clusters + '</span></div>';
+  var html = '<div class="stat-row"><span class="stat-label">Cells</span><span class="stat-value">' + m.n_cells.toLocaleString() + '</span></div>';
+  html += '<div class="stat-row"><span class="stat-label">Clusters</span><span class="stat-value">' + m.n_clusters + '</span></div>';
+  if (rawData.trajectory) {
+    html += '<div class="stat-row"><span class="stat-label">Root</span><span class="stat-value" style="color:#ff6b6b">Cluster ' + rawData.trajectory.root_cluster + '</span></div>';
+    html += '<div class="stat-row"><span class="stat-label">MST Edges</span><span class="stat-value">' + rawData.trajectory.mst_edges.length + '</span></div>';
+  }
+  document.getElementById('stats').innerHTML = html;
 }
 
 function renderLegend() {
   var container = document.getElementById('legend-items');
   container.innerHTML = '';
+  var rootCluster = rawData.trajectory ? rawData.trajectory.root_cluster : null;
   rawData.metadata.clusters.forEach(function(c) {
     var item = document.createElement('div');
-    item.className = 'legend-item' + (hiddenClusters[c.id] ? ' dimmed' : '');
-    item.innerHTML = '<span class="legend-dot" style="background:' + c.color + '"></span><span>Cluster ' + c.label + '</span>';
+    var isRoot = c.id === rootCluster;
+    item.className = 'legend-item' + (hiddenClusters[c.id] ? ' dimmed' : '') + (isRoot ? ' root' : '');
+    item.innerHTML = '<span class="legend-dot" style="background:' + c.color + '"></span><span>Cluster ' + c.label + (isRoot ? ' ★' : '') + '</span>';
     item.addEventListener('click', function() {
       hiddenClusters[c.id] = !hiddenClusters[c.id];
       renderLegend();
@@ -155,6 +293,15 @@ function updateLayer() {
   deckInstance.setProps({ layers: makeLayers() });
 }
 
+document.querySelectorAll('.ctrl-btn[data-mode]').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    document.querySelectorAll('.ctrl-btn[data-mode]').forEach(function(b){ b.classList.remove('active'); });
+    btn.classList.add('active');
+    colorMode = btn.dataset.mode;
+    updateLayer();
+  });
+});
+
 document.querySelectorAll('.ctrl-btn[data-size]').forEach(function(btn) {
   btn.addEventListener('click', function() {
     document.querySelectorAll('.ctrl-btn[data-size]').forEach(function(b){ b.classList.remove('active'); });
@@ -162,6 +309,12 @@ document.querySelectorAll('.ctrl-btn[data-size]').forEach(function(btn) {
     currentPointSize = parseInt(btn.dataset.size);
     updateLayer();
   });
+});
+
+document.getElementById('btn-traj').addEventListener('click', function() {
+  showTrajectory = !showTrajectory;
+  this.classList.toggle('active', showTrajectory);
+  updateLayer();
 });
 </script>
 </body>

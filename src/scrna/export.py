@@ -55,6 +55,8 @@ def export_deckgl_json(
     pct_mito: np.ndarray | None = None,
     n_genes: np.ndarray | None = None,
     total_counts: np.ndarray | None = None,
+    pseudotime: np.ndarray | None = None,
+    trajectory: dict | None = None,
 ) -> Path:
     output_path = Path(output_path)
     n_cells = embedding.shape[0]
@@ -81,6 +83,8 @@ def export_deckgl_json(
             point["n_genes"] = int(n_genes[i])
         if total_counts is not None:
             point["total_counts"] = float(total_counts[i])
+        if pseudotime is not None:
+            point["pseudotime"] = float(pseudotime[i])
         points.append(point)
 
     payload = {
@@ -94,6 +98,11 @@ def export_deckgl_json(
         },
         "points": points,
     }
+
+    if trajectory is not None:
+        payload["trajectory"] = trajectory
+        logger.info("  Trajectory data: %d MST edges, root='%s'",
+                     len(trajectory["mst_edges"]), trajectory["root_cluster"])
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:

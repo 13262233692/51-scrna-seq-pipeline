@@ -11,6 +11,7 @@ src/scrna/normalize.py
 src/scrna/pca.py
 src/scrna/pipeline.py
 src/scrna/qc.py
+src/scrna/trajectory.py
 src/scrna/umap_numba.py
 src/scrna_pipeline.egg-info/PKG-INFO
 src/scrna_pipeline.egg-info/SOURCES.txt

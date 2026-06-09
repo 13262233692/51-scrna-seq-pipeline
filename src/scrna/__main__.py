@@ -22,6 +22,7 @@ def main():
     parser.add_argument("--umap-epochs", type=int, default=500, help="UMAP optimization epochs")
     parser.add_argument("--umap-min-dist", type=float, default=0.1, help="UMAP min_dist")
     parser.add_argument("--leiden-resolution", type=float, default=1.0, help="Leiden resolution")
+    parser.add_argument("--root-cluster", type=str, default=None, help="Root cluster for pseudotime (stem cell cluster)")
     parser.add_argument("--chunk-size", type=int, default=50000, help="Chunk size for .h5ad loading")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose logging")
 
@@ -45,6 +46,7 @@ def main():
         umap_n_epochs=args.umap_epochs,
         umap_min_dist=args.umap_min_dist,
         leiden_resolution=args.leiden_resolution,
+        root_cluster=args.root_cluster,
         output_json=args.output,
     )
 
@@ -57,6 +59,11 @@ def main():
     print(f"  Cells processed:  {adata.n_obs:,}")
     print(f"  Genes retained:   {adata.n_vars:,}")
     print(f"  Clusters found:   {adata.obs['leiden'].nunique()}")
+    if "pseudotime" in adata.obs.columns:
+        print(f"  Pseudotime range: [{adata.obs['pseudotime'].min():.2f}, {adata.obs['pseudotime'].max():.2f}]")
+        traj = adata.uns.get("trajectory", {})
+        print(f"  Root cluster:     {traj.get('root_cluster', 'N/A')}")
+        print(f"  MST edges:        {len(traj.get('mst_edges', []))}")
     print(f"  Output JSON:      {config.output_json}")
     print(f"{'=' * 60}")
 

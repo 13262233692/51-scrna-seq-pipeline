@@ -15,6 +15,7 @@ from scrna.io import ensure_sparse, load_to_memory, get_cell_ids
 from scrna.normalize import log_normalize
 from scrna.pca import run_pca
 from scrna.qc import calculate_qc_metrics, filter_cells, filter_genes
+from scrna.trajectory import trajectory_inference, compute_smooth_trajectory
 from scrna.umap_numba import umap_numba
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,9 @@ class PipelineConfig:
     umap_random_state: int = 42
 
     leiden_resolution: float = 1.0
+
+    root_cluster: str | None = None
+    trajectory_n_interp: int = 20
 
     output_json: str = "output/umap_deckgl.json"
 
@@ -145,15 +149,42 @@ class ScRNAPipeline:
                 resolution=self.config.leiden_resolution,
             )
 
+        with self._step("trajectory"):
+            logger.info("=" * 60)
+            logger.info("STEP 8: Trajectory inference / Pseudotime")
+            logger.info("=" * 60)
+            self.adata = trajectory_inference(
+                self.adata,
+                root_cluster=self.config.root_cluster,
+                use_umap=True,
+            )
+
         with self._step("export"):
             logger.info("=" * 60)
-            logger.info("STEP 8: Exporting Deck.gl JSON")
+            logger.info("STEP 9: Exporting Deck.gl JSON")
             logger.info("=" * 60)
             cell_ids = get_cell_ids(self.adata)
             pct_mito = self.adata.obs["pct_counts_mito"].values if "pct_counts_mito" in self.adata.obs else None
             n_genes = self.adata.obs["n_genes_by_counts"].values if "n_genes_by_counts" in self.adata.obs else None
             total_counts = self.adata.obs["total_counts"].values if "total_counts" in self.adata.obs else None
             cluster_labels = self.adata.obs["leiden"].values
+            pseudotime = self.adata.obs["pseudotime"].values if "pseudotime" in self.adata.obs else None
+
+            trajectory_data = None
+            if "trajectory" in self.adata.uns:
+                traj = self.adata.uns["trajectory"]
+                smooth_path = compute_smooth_trajectory(
+                    traj["centroids"], traj["mst_edges"],
+                    n_interp=self.config.trajectory_n_interp,
+                )
+                trajectory_data = {
+                    "centroids": traj["centroids"].tolist(),
+                    "unique_clusters": traj["unique_clusters"],
+                    "mst_edges": traj["mst_edges"],
+                    "cluster_pseudotime": traj["cluster_pseudotime"].tolist(),
+                    "root_cluster": traj["root_cluster"],
+                    "smooth_path": smooth_path,
+                }
 
             export_deckgl_json(
                 embedding=self.embedding,
@@ -163,6 +194,8 @@ class ScRNAPipeline:
                 pct_mito=pct_mito,
                 n_genes=n_genes,
                 total_counts=total_counts,
+                pseudotime=pseudotime,
+                trajectory=trajectory_data,
             )
 
         logger.info("=" * 60)
