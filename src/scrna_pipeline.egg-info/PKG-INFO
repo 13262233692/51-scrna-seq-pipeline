@@ -1,0 +1,16 @@
+Metadata-Version: 2.4
+Name: scrna-pipeline
+Version: 0.1.0
+Summary: Hardcore scRNA-seq analysis pipeline with Numba-accelerated UMAP and Deck.gl visualization
+Requires-Python: >=3.10
+Requires-Dist: anndata>=0.10.0
+Requires-Dist: h5py>=3.10.0
+Requires-Dist: numpy>=1.24.0
+Requires-Dist: scipy>=1.11.0
+Requires-Dist: numba>=0.59.0
+Requires-Dist: scikit-learn>=1.3.0
+Requires-Dist: leidenalg>=0.10.0
+Requires-Dist: igraph>=0.11.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Requires-Dist: ruff>=0.3.0; extra == "dev"
